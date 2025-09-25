@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Sprunki Game — Buttons Play Audio</title>
+  <title>Sprunki Game</title>
   <style>
     :root{--bg:#061025;--muted:#9aa8bf;--accent:#fbbf24}
     *{box-sizing:border-box}
@@ -20,7 +20,6 @@
     .label{font-weight:700;font-size:14px;text-align:center;color:#fff}
     .debug{margin-top:12px;color:var(--muted);font-size:13px;white-space:pre-wrap}
     @media (max-width:520px){ .icon-btn{width:96px;height:96px} }
-    /* now playing small panel */
     .now-wrap{position:fixed;right:18px;top:18px;width:300px;max-height:60vh;overflow:auto;padding:10px;border-radius:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);display:none}
     .now-item{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:8px}
   </style>
@@ -38,7 +37,7 @@
     </header>
 
     <main>
-      <section id="grid" class="grid"></section>
+      <section id="grid" class="grid" aria-label="Sprunki buttons"></section>
       <div id="debug" class="debug">Debug log:</div>
     </main>
   </div>
@@ -49,28 +48,14 @@
   </div>
 
 <script>
-  // ========== CONFIG ==========
+  // CONFIG (matches your uploaded files in repo root)
   const COUNT = 19;
+  const BTN_BASE = i => `button_${i}`;  // button_1, button_2, ...
+  const AUD_BASE = i => `audio_${i}`;    // audio_1, audio_2, ...
 
-  // Your uploaded base names:
-  // images: button_1, button_2, ..., button_19 (png/jpg/webp) 
-  // audios: audio_1, audio_2, ..., audio_19 (mp3/m4a/ogg/wav)
-  const IMG_BASENAME = i => `button_${i}`;   // button_1
-  const AUD_BASENAME = i => `audio_${i}`;    // audio_1
-
-  // paths to try (first folders, then root)
-  const IMG_LOCATORS = [
-    name => `buttons/${name}`,  // e.g. buttons/button_1.png
-    name => `${name}`           // e.g. button_1.png (repo root)
-  ];
-  const IMG_EXTS = ['.png','.jpg','.jpeg','.webp'];
-
-  const AUD_LOCATORS = [
-    name => `audios/${name}`,   // e.g. audios/audio_1.mp3
-    name => `${name}`           // e.g. audio_1.mp3 (repo root)
-  ];
-  const AUD_EXTS = ['.mp3','.m4a','.ogg','.wav'];
-  // ============================
+  // since files are in the same folder as index.html (root), we only try root
+  const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
+  const AUD_EXTS = ['.mp3', '.m4a', '.ogg', '.wav'];
 
   const grid = document.getElementById('grid');
   const debugEl = document.getElementById('debug');
@@ -79,25 +64,20 @@
   const nowList = document.getElementById('nowList');
 
   let masterVolume = Number(masterVolEl.value);
-  // Map of playing sounds: key -> {audio, label}
-  const playing = new Map();
+  const playing = new Map(); // key -> {audio, label}
 
   function log(...args){
     console.log(...args);
-    const text = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
-    debugEl.textContent += '\n' + text;
-    // keep only last ~20 lines
+    const s = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
+    debugEl.textContent += '\n' + s;
     debugEl.textContent = debugEl.textContent.split('\n').slice(-22).join('\n');
   }
 
-  // Build items
+  // build items for 1..COUNT
   const items = Array.from({length: COUNT}, (_,k) => {
     const i = k+1;
-    // build candidate URLs for icon and audio
-    const iconCandidates = [];
-    IMG_LOCATORS.forEach(locator => IMG_EXTS.forEach(ext => iconCandidates.push(locator(IMG_BASENAME(i) + ext)));
-    const audioCandidates = [];
-    AUD_LOCATORS.forEach(locator => AUD_EXTS.forEach(ext => audioCandidates.push(locator(AUD_BASENAME(i) + ext)));
+    const iconCandidates = IMG_EXTS.map(ext => `${BTN_BASE(i)}${ext}`);
+    const audioCandidates = AUD_EXTS.map(ext => `${AUD_BASE(i)}${ext}`);
     return {
       index: i,
       label: `Sprunki ${i}`,
@@ -106,27 +86,24 @@
     };
   });
 
-  // attempt to set img.src to first candidate and onerror rotate through list
+  // Try to load image candidates sequentially for a given <img>
   function setImgWithFallback(imgEl, candidates){
     let idx = 0;
-    imgEl.src = encodeURI(candidates[idx]);
-    imgEl.onerror = () => {
-      idx++;
-      if(idx < candidates.length){
-        // try next candidate
-        imgEl.onerror = null; // avoid recursive loop while switching
-        imgEl.src = encodeURI(candidates[idx]);
-        // reattach error after a tick
-        setTimeout(()=> imgEl.onerror = () => setImgWithFallback(imgEl, candidates.slice(idx)), 120);
-      } else {
-        // none worked -> show text fallback by removing img and letting button show label
+    function tryIdx(i){
+      if(i >= candidates.length){
+        // no image found -> remove img so button displays text fallback
         imgEl.remove();
-        log('Icon not found. Tried:', candidates.join(', '));
+        log('No button image found for', imgEl.alt, 'tried:', candidates.join(', '));
+        return;
       }
-    };
+      const candidate = candidates[i];
+      imgEl.onerror = () => { tryIdx(i+1); };
+      imgEl.src = encodeURI(candidate);
+    }
+    tryIdx(idx);
   }
 
-  // create one button card
+  // Create a button card for each item
   function createCard(item){
     const card = document.createElement('div');
     card.className = 'card';
@@ -136,18 +113,18 @@
     btn.type = 'button';
     btn.title = item.label;
 
-    // create img and attempt load
     const img = document.createElement('img');
     img.alt = item.label;
+    // Start trying image files in repo root (button_1.png, .jpg, ...)
     setImgWithFallback(img, item.iconCandidates);
     btn.appendChild(img);
 
-    // label shown under button
+    // Label under the button (Sprunki X)
     const label = document.createElement('div');
     label.className = 'label';
     label.textContent = item.label;
 
-    // click: play audio (overlapping allowed)
+    // click -> play audio (overlap allowed)
     btn.addEventListener('click', () => {
       playAudioFallback(item);
     });
@@ -157,12 +134,12 @@
     return card;
   }
 
-  // Play audio: try each candidate until one loads (creates a new Audio each call -> overlapping)
+  // Play audio, try extensions if some missing
   function playAudioFallback(item){
     let attempt = 0;
-    function tryNext(){
+    function tryOne(){
       if(attempt >= item.audioCandidates.length){
-        log('Audio not found for', item.label, 'Tried:', item.audioCandidates.join(', '));
+        log('Audio not found for', item.label, 'Tried: ' + item.audioCandidates.join(', '));
         return;
       }
       const url = item.audioCandidates[attempt];
@@ -170,6 +147,7 @@
       const a = new Audio(encodeURI(url));
       a.preload = 'auto';
       a.volume = masterVolume;
+
       const key = `${item.index}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
       playing.set(key, {audio: a, label: item.label});
       renderNowPlaying();
@@ -180,7 +158,7 @@
         playing.delete(key);
         renderNowPlaying();
         attempt++;
-        tryNext();
+        tryOne();
       });
       a.addEventListener('canplaythrough', () => {
         if(!errored) a.play().catch(()=>{});
@@ -189,13 +167,12 @@
         playing.delete(key);
         renderNowPlaying();
       });
-      // attempt to play (click is a user gesture so should be allowed)
-      a.play().catch(()=>{ /* ignore rejection */ });
+      a.play().catch(()=>{ /* ignore */ });
     }
-    tryNext();
+    tryOne();
   }
 
-  // render small now-playing panel
+  // Render "Now Playing" panel
   function renderNowPlaying(){
     if(playing.size === 0){
       nowWrap.style.display = 'none';
@@ -213,8 +190,8 @@
       const stopBtn = document.createElement('button');
       stopBtn.textContent = '⏹';
       stopBtn.title = 'Stop';
-      stopBtn.addEventListener('click', ()=> {
-        try{ rec.audio.pause(); rec.audio.currentTime = 0; } catch(e){}
+      stopBtn.addEventListener('click', () => {
+        try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){}
         playing.delete(key);
         renderNowPlaying();
       });
@@ -225,26 +202,26 @@
     });
   }
 
-  // Stop All button behavior: pause & reset all audios, clear Map, update UI
+  // Stop All: pause + reset all audios, clear Map, update UI
   document.getElementById('stopAll').addEventListener('click', () => {
     playing.forEach((rec, key) => {
-      try{ rec.audio.pause(); rec.audio.currentTime = 0; } catch(e) {}
+      try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){}
     });
     playing.clear();
     renderNowPlaying();
     log('All sounds stopped.');
   });
 
-  // master volume control
+  // master volume
   masterVolEl.addEventListener('input', (e) => {
     masterVolume = Number(e.target.value);
     playing.forEach(rec => { try{ rec.audio.volume = masterVolume; }catch(e){} });
   });
 
-  // populate 19 buttons
+  // Populate UI with 19 Sprunki buttons
   items.forEach(it => grid.appendChild(createCard(it)));
 
-  log('Ready. Buttons displayed. Click a button to play its audio (overlap allowed). If an icon does not show, check file placement and names.');
+  log('Ready — buttons use button_1..button_19 (root). Labels are Sprunki 1..19. Click to play audio_1..audio_19 (root).');
 
 </script>
 </body>
