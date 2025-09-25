@@ -5,10 +5,10 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Sprunki Game</title>
   <style>
-    :root{--bg:#061025;--muted:#9aa8bf;--accent:#fbbf24}
+    :root{--muted:#9aa8bf}
     *{box-sizing:border-box}
-    body{margin:0;font-family:Inter,system-ui,Roboto,Arial;background:linear-gradient(180deg,#031025 0%,#06102a 100%);color:#eaf1ff;padding:18px}
-    .wrap{max-width:1000px;margin:0 auto}
+    body{margin:0;font-family:Inter,system-ui,Roboto,Arial;background:#031025;color:#eaf1ff;padding:18px}
+    .wrap{max-width:980px;margin:0 auto}
     header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
     .title{font-weight:700;font-size:20px}
     .controls{margin-left:auto;display:flex;gap:10px;align-items:center}
@@ -19,19 +19,18 @@
     .icon-btn img{width:100%;height:100%;object-fit:cover;display:block}
     .label{font-weight:700;font-size:14px;text-align:center;color:#fff}
     .debug{margin-top:12px;color:var(--muted);font-size:13px;white-space:pre-wrap}
-    @media (max-width:520px){ .icon-btn{width:96px;height:96px} }
     .now-wrap{position:fixed;right:18px;top:18px;width:300px;max-height:60vh;overflow:auto;padding:10px;border-radius:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);display:none}
     .now-item{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:8px}
+    @media (max-width:520px){ .icon-btn{width:96px;height:96px} }
   </style>
 </head>
 <body>
   <div class="wrap">
     <header>
       <div class="title">Sprunki</div>
-
       <div class="controls">
         <label style="font-size:13px;color:var(--muted)">Volume</label>
-        <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1" />
+        <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1"/>
         <button id="stopAll">Stop All</button>
       </div>
     </header>
@@ -48,14 +47,14 @@
   </div>
 
 <script>
-  // CONFIG (matches your uploaded files in repo root)
+(async function(){
+  // ---------------- CONFIG ----------------
   const COUNT = 19;
-  const BTN_BASE = i => `button_${i}`;  // button_1, button_2, ...
+  const BTN_BASE = i => `button_${i}`;   // button_1, button_2, ... (repo root)
   const AUD_BASE = i => `audio_${i}`;    // audio_1, audio_2, ...
-
-  // since files are in the same folder as index.html (root), we only try root
-  const IMG_EXTS = ['.png', '.jpg', '.jpeg', '.webp'];
-  const AUD_EXTS = ['.mp3', '.m4a', '.ogg', '.wav'];
+  const IMG_EXTS = ['.png','.jpg','.jpeg','.webp'];
+  const AUD_EXTS = ['.mp3','.m4a','.ogg','.wav'];
+  // ----------------------------------------
 
   const grid = document.getElementById('grid');
   const debugEl = document.getElementById('debug');
@@ -73,106 +72,140 @@
     debugEl.textContent = debugEl.textContent.split('\n').slice(-22).join('\n');
   }
 
-  // build items for 1..COUNT
+  // find first reachable URL from candidate list using HEAD requests
+  async function findAvailableUrl(candidates){
+    for(const c of candidates){
+      try{
+        // use HEAD to check quickly
+        const res = await fetch(encodeURI(c), { method:'HEAD' });
+        if(res.ok) return c;
+        // some servers disallow HEAD; try GET fallback for small file check
+        if(res.status === 405 || res.status === 501){
+          const res2 = await fetch(encodeURI(c), { method:'GET', headers: { Range: 'bytes=0-0' } });
+          if(res2.ok) return c;
+        }
+      }catch(e){
+        // network or CORS error — we still continue trying other candidates
+      }
+    }
+    return null;
+  }
+
+  // Build items array and prepare UI placeholders
   const items = Array.from({length: COUNT}, (_,k) => {
     const i = k+1;
-    const iconCandidates = IMG_EXTS.map(ext => `${BTN_BASE(i)}${ext}`);
-    const audioCandidates = AUD_EXTS.map(ext => `${AUD_BASE(i)}${ext}`);
     return {
       index: i,
       label: `Sprunki ${i}`,
-      iconCandidates,
-      audioCandidates
+      iconCandidates: IMG_EXTS.map(ext => `${BTN_BASE(i)}${ext}`),
+      audioCandidates: AUD_EXTS.map(ext => `${AUD_BASE(i)}${ext}`)
     };
   });
 
-  // Try to load image candidates sequentially for a given <img>
-  function setImgWithFallback(imgEl, candidates){
-    let idx = 0;
-    function tryIdx(i){
-      if(i >= candidates.length){
-        // no image found -> remove img so button displays text fallback
-        imgEl.remove();
-        log('No button image found for', imgEl.alt, 'tried:', candidates.join(', '));
-        return;
-      }
-      const candidate = candidates[i];
-      imgEl.onerror = () => { tryIdx(i+1); };
-      imgEl.src = encodeURI(candidate);
+  // create placeholder card and return references to DOM nodes for later updates
+  function createCardSkeleton(item){
+    const card = document.createElement('div'); card.className='card';
+    const btn = document.createElement('button'); btn.className='icon-btn'; btn.type='button'; btn.title = item.label;
+    // in the beginning put a blank placeholder element
+    const placeholder = document.createElement('div');
+    placeholder.style.width = '100%';
+    placeholder.style.height = '100%';
+    placeholder.style.display = 'flex';
+    placeholder.style.alignItems = 'center';
+    placeholder.style.justifyContent = 'center';
+    placeholder.style.background = 'linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01))';
+    placeholder.style.color = '#fff';
+    placeholder.textContent = 'Loading...';
+    btn.appendChild(placeholder);
+
+    const label = document.createElement('div'); label.className='label'; label.textContent = item.label;
+
+    card.appendChild(btn); card.appendChild(label);
+    grid.appendChild(card);
+
+    return { card, btn, placeholder, label };
+  }
+
+  // create all skeletons and keep references
+  const domRefs = items.map(item => ({ item, refs: createCardSkeleton(item) }));
+
+  // For each item: find available icon file, replace placeholder with <img> or fallback text,
+  // set up click handler to play audio (audio will be resolved on click)
+  await Promise.all(domRefs.map(async ({ item, refs })=>{
+    // 1) find available icon (png/jpg/webp) in repo root
+    const iconUrl = await findAvailableUrl(item.iconCandidates);
+    // replace placeholder with image if available
+    refs.btn.innerHTML = ''; // clear placeholder
+    if(iconUrl){
+      const img = document.createElement('img');
+      img.alt = item.label;
+      img.src = encodeURI(iconUrl);
+      img.onload = ()=> {}; // image loads normally
+      img.onerror = ()=> { // if image somehow fails, fallback to label text
+        img.remove();
+        refs.btn.textContent = item.label;
+        refs.btn.style.fontWeight = '700';
+        refs.btn.style.background = 'linear-gradient(90deg,#fbbf24,#f97316)';
+        refs.btn.style.color = '#071026';
+      };
+      refs.btn.appendChild(img);
+      log('Loaded icon for', item.label, '->', iconUrl);
+    } else {
+      // no icon found: show text button
+      refs.btn.textContent = item.label;
+      refs.btn.style.fontWeight = '700';
+      refs.btn.style.background = 'linear-gradient(90deg,#fbbf24,#f97316)';
+      refs.btn.style.color = '#071026';
+      log('No icon found for', item.label, '; showing text button');
     }
-    tryIdx(idx);
-  }
 
-  // Create a button card for each item
-  function createCard(item){
-    const card = document.createElement('div');
-    card.className = 'card';
-
-    const btn = document.createElement('button');
-    btn.className = 'icon-btn';
-    btn.type = 'button';
-    btn.title = item.label;
-
-    const img = document.createElement('img');
-    img.alt = item.label;
-    // Start trying image files in repo root (button_1.png, .jpg, ...)
-    setImgWithFallback(img, item.iconCandidates);
-    btn.appendChild(img);
-
-    // Label under the button (Sprunki X)
-    const label = document.createElement('div');
-    label.className = 'label';
-    label.textContent = item.label;
-
-    // click -> play audio (overlap allowed)
-    btn.addEventListener('click', () => {
-      playAudioFallback(item);
+    // 2) attach click handler: on click, play audio (try candidate extensions)
+    refs.btn.addEventListener('click', ()=> {
+      playAudioWithFallback(item);
     });
+  }));
 
-    card.appendChild(btn);
-    card.appendChild(label);
-    return card;
-  }
-
-  // Play audio, try extensions if some missing
-  function playAudioFallback(item){
+  // Audio play with fallback: try each extension until one loads / plays.
+  function playAudioWithFallback(item){
     let attempt = 0;
     function tryOne(){
       if(attempt >= item.audioCandidates.length){
-        log('Audio not found for', item.label, 'Tried: ' + item.audioCandidates.join(', '));
+        log('Audio not found for', item.label, 'Tried:', item.audioCandidates.join(', '));
+        // small non-blocking message (optional)
+        // alert(`Audio not found for ${item.label}`);
         return;
       }
-      const url = item.audioCandidates[attempt];
-      log('Trying audio:', url);
-      const a = new Audio(encodeURI(url));
+      const candidate = item.audioCandidates[attempt];
+      log('Trying audio candidate:', candidate);
+      const a = new Audio(encodeURI(candidate));
       a.preload = 'auto';
       a.volume = masterVolume;
-
       const key = `${item.index}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
-      playing.set(key, {audio: a, label: item.label});
+      playing.set(key, { audio: a, label: item.label });
       renderNowPlaying();
 
       let errored = false;
-      a.addEventListener('error', () => {
+      a.addEventListener('error', ()=> {
         errored = true;
         playing.delete(key);
         renderNowPlaying();
         attempt++;
         tryOne();
       });
-      a.addEventListener('canplaythrough', () => {
+      a.addEventListener('canplaythrough', ()=> {
         if(!errored) a.play().catch(()=>{});
       });
-      a.addEventListener('ended', () => {
+      a.addEventListener('ended', ()=> {
         playing.delete(key);
         renderNowPlaying();
       });
-      a.play().catch(()=>{ /* ignore */ });
+      // attempt play (click is a user gesture so this usually works)
+      a.play().catch(()=>{ /* ignore play() rejection */ });
     }
     tryOne();
   }
 
-  // Render "Now Playing" panel
+  // render now-playing
   function renderNowPlaying(){
     if(playing.size === 0){
       nowWrap.style.display = 'none';
@@ -181,29 +214,27 @@
     }
     nowWrap.style.display = 'block';
     nowList.innerHTML = '';
-    Array.from(playing.entries()).forEach(([key, rec]) => {
-      const row = document.createElement('div');
-      row.className = 'now-item';
+    Array.from(playing.entries()).forEach(([key, rec])=>{
+      const row = document.createElement('div'); row.className='now-item';
       const left = document.createElement('div');
       left.innerHTML = `<div style="font-weight:700">${rec.label}</div><div style="font-size:12px;color:var(--muted)">${rec.audio.src.split('/').pop()}</div>`;
       const right = document.createElement('div');
       const stopBtn = document.createElement('button');
       stopBtn.textContent = '⏹';
       stopBtn.title = 'Stop';
-      stopBtn.addEventListener('click', () => {
+      stopBtn.addEventListener('click', ()=> {
         try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){}
         playing.delete(key);
         renderNowPlaying();
       });
       right.appendChild(stopBtn);
-      row.appendChild(left);
-      row.appendChild(right);
+      row.appendChild(left); row.appendChild(right);
       nowList.appendChild(row);
     });
   }
 
-  // Stop All: pause + reset all audios, clear Map, update UI
-  document.getElementById('stopAll').addEventListener('click', () => {
+  // Stop All: stop, reset and clear the map
+  document.getElementById('stopAll').addEventListener('click', ()=>{
     playing.forEach((rec, key) => {
       try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){}
     });
@@ -213,16 +244,16 @@
   });
 
   // master volume
-  masterVolEl.addEventListener('input', (e) => {
+  masterVolEl.addEventListener('input', (e)=> {
     masterVolume = Number(e.target.value);
     playing.forEach(rec => { try{ rec.audio.volume = masterVolume; }catch(e){} });
   });
 
-  // Populate UI with 19 Sprunki buttons
-  items.forEach(it => grid.appendChild(createCard(it)));
-
-  log('Ready — buttons use button_1..button_19 (root). Labels are Sprunki 1..19. Click to play audio_1..audio_19 (root).');
-
+  // initial log
+  log('Initialization finished. If an image does not appear, check the exact filename (case-sensitive) and extension.');
+  log('Example tested paths for item 1:', items[0].iconCandidates.join(', '));
+  log('Example audio paths for item 1:', items[0].audioCandidates.join(', '));
+})();
 </script>
 </body>
 </html>
