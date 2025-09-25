@@ -1,257 +1,197 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Sprunki Game — image debug</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sprunki Game</title>
 <style>
-  :root{--muted:#9aa8bf}
+  :root{--muted:#9aa8bf;--accent:#fbbf24}
   *{box-sizing:border-box}
   body{margin:0;font-family:Inter,system-ui,Roboto,Arial;background:#031025;color:#eaf1ff;padding:18px}
   .wrap{max-width:980px;margin:0 auto}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
-  .card{display:flex;flex-direction:column;align-items:center;gap:8px;padding:10px;border-radius:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03)}
-  .icon-btn{width:120px;height:120px;border-radius:12px;overflow:hidden;border:0;padding:0;background:transparent;display:flex;align-items:center;justify-content:center}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .title{font-weight:700;font-size:20px}
+  .controls{margin-left:auto;display:flex;gap:10px;align-items:center}
+  input[type="range"]{width:120px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:12px}
+  .card{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03)}
+  .icon-btn{width:88px;height:88px;border-radius:10px;overflow:hidden;border:0;padding:0;background:transparent;display:flex;align-items:center;justify-content:center}
   .icon-btn img{width:100%;height:100%;object-fit:cover;display:block}
-  .label{font-weight:700;font-size:14px;text-align:center;color:#fff}
-  .debug{margin-top:12px;color:var(--muted);font-size:13px;white-space:pre-wrap;max-height:200px;overflow:auto;padding:8px;background:rgba(0,0,0,0.2);border-radius:6px}
-  button, input{cursor:pointer}
+  .label{font-weight:700;font-size:13px;text-align:center;color:#fff}
+  .debug{margin-top:12px;color:var(--muted);font-size:13px;white-space:pre-wrap}
+  .now-wrap{position:fixed;right:12px;top:12px;width:260px;max-height:60vh;overflow:auto;padding:8px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);display:none}
+  .now-item{display:flex;justify-content:space-between;align-items:center;padding:6px;border-radius:6px;background:rgba(255,255,255,0.01);margin-bottom:6px}
+  @media (max-width:520px){ .icon-btn{width:72px;height:72px} .label{font-size:12px} }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <header style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-      <div style="font-weight:700;font-size:20px">Sprunki</div>
-      <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+    <header>
+      <div class="title">Sprunki</div>
+      <div class="controls">
         <label style="font-size:13px;color:var(--muted)">Volume</label>
-        <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1" style="width:120px">
+        <input id="masterVol" type="range" min="0" max="1" step="0.01" value="1">
         <button id="stopAll">Stop All</button>
       </div>
     </header>
 
     <main>
       <section id="grid" class="grid" aria-label="Sprunki buttons"></section>
-      <div id="debug" class="debug">Debug log (image tests will appear here)...</div>
+      <div id="debug" class="debug" aria-hidden="true">Debug (last lines):</div>
     </main>
   </div>
 
+  <div id="nowWrap" class="now-wrap" aria-live="polite">
+    <strong style="display:block;margin-bottom:8px">Now Playing</strong>
+    <div id="nowList"></div>
+  </div>
+
 <script>
-(async function(){
-  // CONFIG
+(function(){
+  // CONFIG — uses repo root files: button_1.png ... button_19.png and audio_1(.mp3/.m4a/.ogg/.wav)
   const COUNT = 19;
-  const BTN_BASES = i => [`button_${i}`, `Button_${i}`, `button-${i}`, `button${i}`, `button_0${i}`];
-  const AUD_BASE = i => `audio_${i}`; // audio_1...
-  const IMG_EXTS = ['.png','.jpg','.jpeg','.webp'];
-  const IMG_EXTS_CASE = (ext) => [ext, ext.toUpperCase()]; // try upper-case too
-  const AUD_EXTS = ['.mp3','.m4a','.ogg','.wav'];
+  const BTN_NAME = i => `button_${i}`; // expects button_1.png etc
+  const AUD_NAME = i => `audio_${i}`;   // expects audio_1.mp3 etc
+  const IMG_EXT = '.png'; // you said images are PNG — keep primary .png
+  const AUDIO_EXTS = ['.mp3', '.m4a', '.ogg', '.wav']; // fallback order for audio
 
   const grid = document.getElementById('grid');
   const debugEl = document.getElementById('debug');
   const masterVolEl = document.getElementById('masterVol');
+  const nowWrap = document.getElementById('nowWrap');
+  const nowList = document.getElementById('nowList');
 
   let masterVolume = Number(masterVolEl.value);
+  // map of active audio objects (unique key -> {audio,label})
   const playing = new Map();
 
   function log(...args){
     console.log(...args);
-    debugEl.textContent += '\\n' + args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
-    debugEl.scrollTop = debugEl.scrollHeight;
+    const line = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    debugEl.textContent = (debugEl.textContent + '\n' + line).split('\n').slice(-18).join('\n');
   }
 
-  // build items
-  const items = Array.from({length: COUNT}, (_,k) => {
-    const i = k+1;
-    // build candidate image filenames using several base variations and extensions
-    const bases = BTN_BASES(i);
-    const iconCandidates = [];
-    for(const b of bases){
-      for(const ext of IMG_EXTS){
-        iconCandidates.push(`${b}${ext}`);
-        iconCandidates.push(`${b}${ext.toUpperCase()}`); // uppercase ext
-      }
-    }
-    // Also try a leading folder names (buttons/)
-    const iconCandidatesWithFolder = [];
-    for(const c of iconCandidates){
-      iconCandidatesWithFolder.push(`buttons/${c}`);
-      iconCandidatesWithFolder.push(c); // root
-    }
-    // audio candidates (root only)
-    const audioCandidates = AUD_EXTS.flatMap(ext => [`${AUD_BASE(i)}${ext}`, `${AUD_BASE(i)}${ext.toUpperCase()}`]);
-
-    return { index: i, label: `Sprunki ${i}`, iconCandidates: iconCandidatesWithFolder, audioCandidates };
-  });
-
-  // helper: test image availability by creating Image() and waiting for load or error
-  function testImage(url){
-    return new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => resolve({ok:true, url});
-      img.onerror = () => resolve({ok:false, url});
-      // set src after handlers to be safe
-      img.src = encodeURI(url);
-      // if browser refuses due to mixed content/CORS it will call onerror
-      // note: we do not attach to DOM
-    });
-  }
-
-  // create UI placeholders then resolve images asynchronously
-  items.forEach(item=>{
+  // Create UI buttons expecting button_X.png in repo root
+  for(let i=1;i<=COUNT;i++){
+    const itemLabel = `Sprunki ${i}`;
     const card = document.createElement('div'); card.className='card';
-    const btn = document.createElement('button'); btn.className='icon-btn'; btn.type='button'; btn.title = item.label;
-    const placeholder = document.createElement('div'); placeholder.style.width='100%'; placeholder.style.height='100%'; placeholder.style.display='flex'; placeholder.style.alignItems='center'; placeholder.style.justifyContent='center'; placeholder.textContent = '...';
-    btn.appendChild(placeholder);
-    const label = document.createElement('div'); label.className='label'; label.textContent = item.label;
-    card.appendChild(btn); card.appendChild(label);
-    grid.appendChild(card);
 
-    // click handler will be set later after we resolve audio/image existence
-    // store references on DOM
-    item._dom = { btn, placeholder, label };
-  });
+    const btn = document.createElement('button'); btn.className='icon-btn'; btn.type='button'; btn.title = itemLabel;
+    const img = document.createElement('img');
+    img.alt = itemLabel;
+    img.src = encodeURI(`${BTN_NAME(i)}${IMG_EXT}`); // button_1.png
 
-  // For each item: find first available image using Image() approach, then replace placeholder
-  for(const item of items){
-    log('Searching icon for', item.label);
-    let foundUrl = null;
-    for(const c of item.iconCandidates){
-      log(' → trying', c);
-      // test image load
-      // await sequentially to avoid many parallel requests (keeps logs readable)
-      // but could be parallelized if you prefer
-      // note: we intentionally try root and buttons/ variants
-      // testImage returns ok:true if load succeeded
-      // if the file exists on GH Pages, this will load
-      // small images are fast; larger will still fire load
-      // catch and continue on errors (network/CORS)
-      try{
-        // race a small timeout in case something hangs
-        const res = await Promise.race([
-          testImage(c),
-          new Promise(r => setTimeout(()=>r({ok:false,url:c}), 2500))
-        ]);
-        if(res && res.ok){
-          foundUrl = c;
-          log('  ✓ FOUND', c);
-          break;
-        } else {
-          log('  x not found', c);
-        }
-      }catch(e){
-        log('  ! error testing', c, e.toString());
-      }
-    }
+    // if image load fails, fallback to text-styled button
+    img.onerror = () => {
+      img.remove();
+      btn.textContent = itemLabel;
+      btn.style.fontWeight = '700';
+      btn.style.background = 'linear-gradient(90deg,#fbbf24,#f97316)';
+      btn.style.color = '#071026';
+      btn.style.borderRadius = '10px';
+      btn.style.padding = '8px';
+    };
 
-    const { btn, placeholder } = item._dom;
-    // clear placeholder content
-    btn.innerHTML = '';
-    if(foundUrl){
-      const img = document.createElement('img');
-      img.src = encodeURI(foundUrl);
-      img.alt = item.label;
-      img.onerror = ()=> {
-        // fallback to text if image didn't render in DOM
-        img.remove();
-        btn.textContent = item.label;
-        btn.style.fontWeight='700';
-        btn.style.background='linear-gradient(90deg,#fbbf24,#f97316)';
-        btn.style.color='#071026';
-        log('Image element failed to render for', foundUrl);
-      };
-      btn.appendChild(img);
-    } else {
-      // no icon found — show label as button
-      btn.textContent = item.label;
-      btn.style.fontWeight='700';
-      btn.style.background='linear-gradient(90deg,#fbbf24,#f97316)';
-      btn.style.color='#071026';
-      log('No icon found for', item.label, '; tried:', item.iconCandidates.join(', '));
-    }
+    btn.appendChild(img);
+    const label = document.createElement('div'); label.className='label'; label.textContent = itemLabel;
 
-    // set click handler to play audio
     btn.addEventListener('click', ()=> {
-      playAudioWithFallback(item);
+      playAudioForIndex(i, itemLabel);
     });
+
+    card.appendChild(btn);
+    card.appendChild(label);
+    grid.appendChild(card);
   }
 
-  // Audio play (tries extensions) — overlapping allowed
-  function playAudioWithFallback(item){
+  // Play audio for index i — tries extensions in AUDIO_EXTS
+  function playAudioForIndex(i, label){
     let attempt = 0;
     function tryOne(){
-      if(attempt >= item.audioCandidates.length){
-        log('Audio not found for', item.label, 'Tried:', item.audioCandidates.join(', '));
+      if(attempt >= AUDIO_EXTS.length){
+        log('Audio not found for', label, 'tried:', AUDIO_EXTS.map(e=>`${AUD_NAME(i)}${e}`).join(', '));
         return;
       }
-      const src = item.audioCandidates[attempt];
-      log('Trying audio', src);
-      const a = new Audio(encodeURI(src));
+      const url = `${AUD_NAME(i)}${AUDIO_EXTS[attempt]}`; // audio_1.mp3, fallback...
+      log('Trying audio:', url);
+      const a = new Audio(encodeURI(url));
       a.preload = 'auto';
       a.volume = masterVolume;
-      const key = `${item.index}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
-      playing.set(key, { audio: a, label: item.label });
+      const key = `${i}-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+      playing.set(key, { audio: a, label });
+
+      // add to now-playing UI
       renderNowPlaying();
+
       let errored = false;
-      a.addEventListener('error', ()=>{ errored=true; playing.delete(key); renderNowPlaying(); attempt++; tryOne(); });
-      a.addEventListener('canplaythrough', ()=>{ if(!errored) a.play().catch(()=>{}); });
-      a.addEventListener('ended', ()=>{ playing.delete(key); renderNowPlaying(); });
-      a.play().catch(()=>{});
+      a.addEventListener('error', ()=> {
+        errored = true;
+        playing.delete(key);
+        renderNowPlaying();
+        attempt++;
+        tryOne();
+      });
+      a.addEventListener('canplaythrough', ()=> {
+        if(!errored){
+          a.play().catch(()=>{});
+        }
+      });
+      a.addEventListener('ended', ()=> {
+        playing.delete(key);
+        renderNowPlaying();
+      });
+      // trigger play attempt
+      a.play().catch(()=>{ /* ignore */ });
     }
     tryOne();
   }
 
-  // now-playing UI
+  // Render now-playing panel
   function renderNowPlaying(){
-    const nowWrap = document.getElementById('nowWrap') || createNowWrap();
     if(playing.size === 0){
-      nowWrap.style.display = 'none'; nowWrap.querySelector('#nowList').innerHTML = ''; return;
+      nowWrap.style.display = 'none';
+      nowList.innerHTML = '';
+      return;
     }
     nowWrap.style.display = 'block';
-    const list = nowWrap.querySelector('#nowList');
-    list.innerHTML = '';
-    Array.from(playing.entries()).forEach(([key, rec])=>{
-      const row = document.createElement('div'); row.style.display='flex'; row.style.justifyContent='space-between'; row.style.alignItems='center'; row.style.marginBottom='8px';
-      const left = document.createElement('div'); left.innerHTML = `<strong style="display:block">${rec.label}</strong><div style="font-size:12px;color:var(--muted)">${rec.audio.src.split('/').pop()}</div>`;
+    nowList.innerHTML = '';
+    Array.from(playing.entries()).forEach(([key, rec]) => {
+      const row = document.createElement('div'); row.className = 'now-item';
+      const left = document.createElement('div');
+      left.innerHTML = `<div style="font-weight:700">${rec.label}</div><div style="font-size:12px;color:var(--muted)">${rec.audio.src.split('/').pop()}</div>`;
       const right = document.createElement('div');
-      const stopBtn = document.createElement('button'); stopBtn.textContent='⏹'; stopBtn.addEventListener('click', ()=>{ try{ rec.audio.pause(); rec.audio.currentTime=0;}catch(e){} playing.delete(key); renderNowPlaying(); });
+      const stopBtn = document.createElement('button'); stopBtn.textContent = '⏹'; stopBtn.title = 'Stop';
+      stopBtn.addEventListener('click', ()=> {
+        try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){}
+        playing.delete(key);
+        renderNowPlaying();
+      });
       right.appendChild(stopBtn);
       row.appendChild(left); row.appendChild(right);
-      list.appendChild(row);
+      nowList.appendChild(row);
     });
   }
 
-  function createNowWrap(){
-    const wrap = document.createElement('div');
-    wrap.id = 'nowWrap';
-    wrap.style.position = 'fixed';
-    wrap.style.right = '18px';
-    wrap.style.top = '18px';
-    wrap.style.width = '300px';
-    wrap.style.maxHeight = '60vh';
-    wrap.style.overflow = 'auto';
-    wrap.style.padding = '10px';
-    wrap.style.borderRadius = '10px';
-    wrap.style.background = 'rgba(255,255,255,0.02)';
-    wrap.style.border = '1px solid rgba(255,255,255,0.03)';
-    wrap.innerHTML = '<strong style="display:block;margin-bottom:8px">Now Playing</strong><div id="nowList"></div>';
-    document.body.appendChild(wrap);
-    return wrap;
-  }
-
-  // Stop All
-  document.getElementById('stopAll').addEventListener('click', ()=>{
-    playing.forEach((rec, k)=>{ try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){} });
+  // Stop All: pause & reset all audio and clear the map
+  document.getElementById('stopAll').addEventListener('click', ()=> {
+    playing.forEach((rec, key) => {
+      try{ rec.audio.pause(); rec.audio.currentTime = 0; }catch(e){}
+    });
     playing.clear();
     renderNowPlaying();
     log('All sounds stopped.');
   });
 
-  // volume
-  masterVolEl.addEventListener('input', e => { masterVolume = Number(e.target.value); playing.forEach(p=>{ try{ p.audio.volume = masterVolume; }catch(e){} }); });
+  // Master volume
+  masterVolEl.addEventListener('input', (e)=>{
+    masterVolume = Number(e.target.value);
+    playing.forEach(rec => { try{ rec.audio.volume = masterVolume; }catch(e){} });
+  });
 
-  // initial log
-  log('Image detection completed. If you still see text buttons, copy one tried URL above and open it in a new tab to see the exact 404 or success.');
+  // initial debug note
+  log('Sprunki game loaded. Expecting files in repo root: button_1.png ... button_19.png and audio_1(.mp3/.m4a/.ogg/.wav).');
+
 })();
 </script>
-
 </body>
 </html>
